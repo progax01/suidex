@@ -56,7 +56,7 @@ module suidex::lp_token {
         ctx: &mut TxContext
     ) {
         let balance = balance::increase_supply(&mut cap.supply, amount);
-        let value = balance::value(&balance);
+        // let value = balance::value(&balance);
         balance::decrease_supply(&mut cap.supply, balance);
         
         recipient.balance = recipient.balance + amount;

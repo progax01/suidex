@@ -20,9 +20,9 @@ module suidex::pool {
     const EInsufficientInputAmount: u64 = 3;
     const EInvalidK: u64 = 4;
     const EInsufficientLiquidityMinted: u64 = 5;
-    const EInsufficientLiquidityBurned: u64 = 6;
-    const EInsufficientBalance: u64 = 7;
-    const EOrderMismatch: u64 = 8;
+    // const EInsufficientLiquidityBurned: u64 = 6;
+    // const EInsufficientBalance: u64 = 7;
+    // const EOrderMismatch: u64 = 8;
 
     /// The pool struct representing a trading pair
     struct Pool<phantom CoinTypeA, phantom CoinTypeB> has key {
@@ -126,6 +126,9 @@ module suidex::pool {
             // First liquidity provision
             amount_a = coin_a_value;
             amount_b = coin_b_value;
+            // Check slippage for initial liquidity
+            assert!(amount_a >= amount_a_min, EInsufficientLiquidity);
+            assert!(amount_b >= amount_b_min, EInsufficientLiquidity);
         } else {
             // Calculate amounts based on the ratio
             amount_b = u64::min((coin_a_value * reserve_b) / reserve_a, coin_b_value);
@@ -367,4 +370,4 @@ module suidex::pool {
     public fun get_fee_bps<CoinTypeA, CoinTypeB>(pool: &Pool<CoinTypeA, CoinTypeB>): u64 {
         pool.fee_bps
     }
-} 
+}

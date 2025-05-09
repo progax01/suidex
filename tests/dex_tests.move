@@ -126,6 +126,174 @@ module suidex::dex_tests {
         ts::end(scenario);
     }
 
+    #[test]
+    fun test_add_liquidity_exact_min_amounts() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_create_pool(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let usdc_coin = create_test_usdc(1000000, ts::ctx(&mut scenario));
+            let sui_coin = create_test_sui(5000000, ts::ctx(&mut scenario));
+            transfer::public_transfer(usdc_coin, USER1);
+            transfer::public_transfer(sui_coin, USER1);
+        };
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            let usdc_coin = ts::take_from_sender<Coin<USDC>>(&scenario);
+            // Add liquidity with min amounts exactly equal to provided
+            let lp_tokens = router::add_liquidity<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                usdc_coin,
+                5000000,
+                1000000,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            transfer::public_transfer(lp_tokens, USER1);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 1, location = suidex::pool)]
+    fun test_remove_liquidity_min_amounts_too_high() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+
+            // Get current reserves to set high min amounts
+            let (reserve_sui, reserve_usdc) = pool::get_reserves(&pool);
+            
+            // Try to remove liquidity with min amounts higher than possible
+            let (sui_coin, usdc_coin) = router::remove_liquidity<SUI, USDC>(
+                &factory,
+                &mut pool,
+                lp_tokens,
+                reserve_sui + 1,  // Request more than total SUI reserve
+                reserve_usdc + 1, // Request more than total USDC reserve
+                0,
+                ts::ctx(&mut scenario)
+            );
+            transfer::public_transfer(sui_coin, USER1);
+            transfer::public_transfer(usdc_coin, USER1);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 2, location = suidex::pool)]
+    fun test_swap_min_amount_out_too_high() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let sui_coin = create_test_sui(1000000, ts::ctx(&mut scenario));
+            transfer::public_transfer(sui_coin, USER2);
+        };
+        ts::next_tx(&mut scenario, USER2);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            // Set min amount out too high
+            let usdc_out = router::swap_exact_input<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                999999999,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            // Transfer to dummy address to satisfy ability constraint
+            transfer::public_transfer(usdc_out, @0xCAFE);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_swap_min_amount_out_exact() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let sui_coin = create_test_sui(1000000, ts::ctx(&mut scenario));
+            transfer::public_transfer(sui_coin, USER2);
+        };
+        ts::next_tx(&mut scenario, USER2);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            // Calculate expected amount out
+            let expected_out = router::get_amount_out<SUI, USDC>(&pool, coin::value(&sui_coin));
+            let usdc_out = router::swap_exact_input<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                expected_out,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            assert!(coin::value(&usdc_out) == expected_out, 200);
+            transfer::public_transfer(usdc_out, USER2);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 3, location = suidex::router)]
+    fun test_add_liquidity_deadline_expired() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_create_pool(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let usdc_coin = create_test_usdc(1000000, ts::ctx(&mut scenario));
+            let sui_coin = create_test_sui(5000000, ts::ctx(&mut scenario));
+            transfer::public_transfer(usdc_coin, USER1);
+            transfer::public_transfer(sui_coin, USER1);
+        };
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            let usdc_coin = ts::take_from_sender<Coin<USDC>>(&scenario);
+            // Use deadline in the past
+            let lp_tokens = router::add_liquidity<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                usdc_coin,
+                0,
+                0,
+                0, // deadline expired
+                ts::ctx(&mut scenario)
+            );
+            // Transfer to dummy address to satisfy ability constraint
+            transfer::public_transfer(lp_tokens, @0xCAFE);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
     // Test swapping tokens
     #[test]
     fun test_swap() {
@@ -352,5 +520,120 @@ module suidex::dex_tests {
             ts::return_shared(factory);
             ts::return_shared(pool);
         };
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 0, location = suidex::factory)]
+    fun test_create_pool_already_exists() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_create_pool(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            // This should abort with code 0
+            factory::create_pool<SUI, USDC>(&mut factory, ts::ctx(&mut scenario));
+            ts::return_shared(factory);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 0, location = suidex::factory)]
+    fun test_create_pool_already_exists_negative() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_create_pool(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            // This should abort with code 0 (EPoolExists)
+            factory::create_pool<SUI, USDC>(&mut factory, ts::ctx(&mut scenario));
+            ts::return_shared(factory);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_get_pool_not_exists_negative() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_factory(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let (exists, addr) = factory::get_pool<SUI, USDC>(&factory);
+            assert!(!exists, 100);
+            assert_eq(addr, @0x0);
+            ts::return_shared(factory);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_pool_exists_not_exists_negative() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_factory(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let exists = factory::pool_exists<SUI, USDC>(&factory);
+            assert!(!exists, 101);
+            ts::return_shared(factory);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 0, location = suidex::pool)]
+    fun test_add_liquidity_zero_amount() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_create_pool(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let sui_coin = create_test_sui(0, ts::ctx(&mut scenario));
+            let usdc_coin = create_test_usdc(0, ts::ctx(&mut scenario));
+            transfer::public_transfer(sui_coin, USER1);
+            transfer::public_transfer(usdc_coin, USER1);
+        };
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            let usdc_coin = ts::take_from_sender<Coin<USDC>>(&scenario);
+            // Assign and consume the returned LP
+            let _lp = router::add_liquidity<SUI, USDC>(&factory, &mut pool, sui_coin, usdc_coin, 0, 0, 0, ts::ctx(&mut scenario));
+            let dummy_address = @0xCAFE;
+            transfer::public_transfer(_lp, dummy_address);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 1, location = suidex::pool)]
+    fun test_add_liquidity_min_amounts_too_high() {
+        let scenario = ts::begin(ADMIN);
+        setup_tokens_and_create_pool(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let sui_coin = create_test_sui(1000, ts::ctx(&mut scenario));
+            let usdc_coin = create_test_usdc(1000, ts::ctx(&mut scenario));
+            transfer::public_transfer(sui_coin, USER1);
+            transfer::public_transfer(usdc_coin, USER1);
+        };
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            let usdc_coin = ts::take_from_sender<Coin<USDC>>(&scenario);
+            // Assign and consume the returned LP
+            let _lp = router::add_liquidity<SUI, USDC>(&factory, &mut pool, sui_coin, usdc_coin, 2000, 2000, 0, ts::ctx(&mut scenario));
+            let dummy_address = @0xCAFE;
+            transfer::public_transfer(_lp, dummy_address);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
     }
 }
