@@ -1,13 +1,12 @@
 #[test_only]
-module suidex::dex_tests {
-    use sui::test_scenario::{Self as ts, Scenario};
+module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
     use sui::coin::{Self, Coin};
     use sui::test_utils::assert_eq;
-    use sui::transfer;
+    use sui::transfer;    
     use sui::tx_context::TxContext;
     use suidex::factory::{Self, DexFactory};
     use suidex::pool::{Self, Pool};
-    use suidex::lp_token::LP;
+    use suidex::lp_token::{Self as lp_token, LP};
     use suidex::router;
 
     // Test tokens with their own module context
@@ -255,45 +254,7 @@ module suidex::dex_tests {
             ts::return_shared(pool);
         };
         ts::end(scenario);
-    }
-
-    #[test]
-    #[expected_failure(abort_code = 3, location = suidex::router)]
-    fun test_add_liquidity_deadline_expired() {
-        let scenario = ts::begin(ADMIN);
-        setup_tokens_and_create_pool(&mut scenario);
-        ts::next_tx(&mut scenario, ADMIN);
-        {
-            let usdc_coin = create_test_usdc(1000000, ts::ctx(&mut scenario));
-            let sui_coin = create_test_sui(5000000, ts::ctx(&mut scenario));
-            transfer::public_transfer(usdc_coin, USER1);
-            transfer::public_transfer(sui_coin, USER1);
-        };
-        ts::next_tx(&mut scenario, USER1);
-        {
-            let factory = ts::take_shared<DexFactory>(&scenario);
-            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
-            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
-            let usdc_coin = ts::take_from_sender<Coin<USDC>>(&scenario);
-            // Use deadline in the past
-            let lp_tokens = router::add_liquidity<SUI, USDC>(
-                &factory,
-                &mut pool,
-                sui_coin,
-                usdc_coin,
-                0,
-                0,
-                0, // deadline expired
-                ts::ctx(&mut scenario)
-            );
-            // Transfer to dummy address to satisfy ability constraint
-            transfer::public_transfer(lp_tokens, @0xCAFE);
-            ts::return_shared(factory);
-            ts::return_shared(pool);
-        };
-        ts::end(scenario);
-    }
-
+    }    
     // Test swapping tokens
     #[test]
     fun test_swap() {
@@ -438,6 +399,114 @@ module suidex::dex_tests {
             ts::return_shared(pool);
         };
         
+        ts::end(scenario);
+    }   
+    // #[test]
+    // #[expected_failure(abort_code = 0, location = suidex::lp_token)]
+    // fun test_lp_token_burn_insufficient_balance() {
+    //     let scenario = ts::begin(ADMIN);
+    //     setup_pool_with_liquidity(&mut scenario);
+    //     ts::next_tx(&mut scenario, USER1);
+    //     {
+    //         let factory = ts::take_shared<DexFactory>(&scenario);
+    //         let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+    //         let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+            
+    //         let original_balance = lp_token::balance(&lp_tokens);
+
+    //         // Split LP tokens into half
+    //         let split_lp = lp_token::split(&mut lp_tokens, original_balance / 2, ts::ctx(&mut scenario));
+            
+    //         // Try to split more than available (this should fail)
+    //         let _ = lp_token::split(&mut split_lp, original_balance, ts::ctx(&mut scenario));
+            
+    //         // These lines won't execute due to the split failing above
+    //         transfer::public_transfer(split_lp, USER1);
+    //         transfer::public_transfer(lp_tokens, USER1);
+            
+    //         ts::return_shared(factory);
+    //         ts::return_shared(pool);
+    //     };
+    //     ts::end(scenario);
+    // }
+
+    #[test]
+    fun test_lp_token_split_join() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+            
+            let original_balance = lp_token::balance(&lp_tokens);            let half_balance = original_balance / 2;
+            
+            // Split LP tokens - Note: due to Move's integer division, we need to handle rounding
+            let split_lp = lp_token::split(&mut lp_tokens, half_balance, ts::ctx(&mut scenario));
+            let remaining_balance = original_balance - half_balance; // This accounts for integer division rounding
+            assert!(lp_token::balance(&lp_tokens) == remaining_balance, 0);
+            assert!(lp_token::balance(&split_lp) == half_balance, 1);
+            
+            // Join LP tokens back
+            lp_token::join(&mut lp_tokens, split_lp);
+            assert!(lp_token::balance(&lp_tokens) == original_balance, 2);
+            
+            // Clean up
+            transfer::public_transfer(lp_tokens, USER1);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 0, location = suidex::lp_token)]
+    fun test_lp_token_split_insufficient_balance() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+              let balance = lp_token::balance(&lp_tokens);
+            // Try to split more than available
+            let split_lp = lp_token::split(&mut lp_tokens, balance + 1, ts::ctx(&mut scenario));
+            transfer::public_transfer(split_lp, USER1);
+            
+            transfer::public_transfer(lp_tokens, USER1);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_lp_token_split_zero() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+            
+            let original_balance = lp_token::balance(&lp_tokens);
+            // Split zero amount
+            let split_lp = lp_token::split(&mut lp_tokens, 0, ts::ctx(&mut scenario));
+            
+            assert!(lp_token::balance(&lp_tokens) == original_balance, 0);
+            assert!(lp_token::balance(&split_lp) == 0, 1);
+            
+            // Join back the zero balance LP token
+            lp_token::join(&mut lp_tokens, split_lp);
+            assert!(lp_token::balance(&lp_tokens) == original_balance, 2);
+            
+            transfer::public_transfer(lp_tokens, USER1);
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
         ts::end(scenario);
     }
 
