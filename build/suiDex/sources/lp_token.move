@@ -57,9 +57,9 @@ module suidex::lp_token {
     ) {
         let balance = balance::increase_supply(&mut cap.supply, amount);
         let value = balance::value(&balance);
-        balance::destroy_zero(balance);
+        balance::decrease_supply(&mut cap.supply, balance);
         
-        recipient.balance = recipient.balance + value;
+        recipient.balance = recipient.balance + amount;
         
         event::emit(LPMinted<X, Y> {
             amount,

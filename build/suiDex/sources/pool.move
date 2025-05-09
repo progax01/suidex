@@ -68,6 +68,11 @@ module suidex::pool {
 
     /// Create a new pool for a token pair
     public fun create_pool<CoinTypeA, CoinTypeB>(ctx: &mut TxContext) {
+        create_pool_and_get_address<CoinTypeA, CoinTypeB>(ctx);
+    }
+
+    /// Create a new pool for a token pair and return its address
+    public fun create_pool_and_get_address<CoinTypeA, CoinTypeB>(ctx: &mut TxContext): address {
         // Type ordering is managed at the factory level
         
         let lp_cap = lp_token::new<CoinTypeA, CoinTypeB>(ctx);
@@ -89,6 +94,7 @@ module suidex::pool {
         });
         
         transfer::share_object(pool);
+        pool_address
     }
 
     /// Add liquidity to the pool
@@ -134,7 +140,26 @@ module suidex::pool {
         let lp_amount: u64;
         if (pool.total_supply == 0) {
             // Initial liquidity - use sqrt(a * b) - MINIMAL_LIQUIDITY
-            lp_amount = u64::sqrt(amount_a * amount_b) - MINIMAL_LIQUIDITY;
+            // For safety with large numbers, use a simpler calculation for the initial provision
+            // Check if multiplication would overflow by using a safer approach
+            let product = if (amount_a > 0 && amount_b > (18446744073709551615 / amount_a)) {
+                // If the product would overflow, scale down the numbers
+                let scaled_a = amount_a / 1000;
+                let scaled_b = amount_b / 1000;
+                scaled_a * scaled_b
+            } else {
+                amount_a * amount_b
+            };
+            
+            lp_amount = u64::sqrt(product);
+            
+            // Ensure we don't underflow when subtracting MINIMAL_LIQUIDITY
+            if (lp_amount > MINIMAL_LIQUIDITY) {
+                lp_amount = lp_amount - MINIMAL_LIQUIDITY;
+            } else {
+                lp_amount = MINIMAL_LIQUIDITY;
+            };
+            
             pool.total_supply = lp_amount + MINIMAL_LIQUIDITY;
         } else {
             // Subsequent liquidity - min(a/A, b/B) * totalSupply
@@ -255,14 +280,11 @@ module suidex::pool {
         let reserve_a = balance::value(&pool.reserve_a);
         let reserve_b = balance::value(&pool.reserve_b);
         
-        let amount_a_out = 0;
-        let amount_b_out = 0;
-        
         // Calculate output amount using the formula:
         // amount_out = (amount_in * (10000 - fee_bps) * reserve_out) / (reserve_in * 10000 + amount_in * (10000 - fee_bps))
         if (amount_a_in > 0) {
             // User is swapping token A for token B
-            amount_b_out = get_amount_out(amount_a_in, reserve_a, reserve_b, pool.fee_bps);
+            let amount_b_out = get_amount_out(amount_a_in, reserve_a, reserve_b, pool.fee_bps);
             assert!(amount_b_out > 0, EInsufficientOutputAmount);
             assert!(amount_b_out >= amount_b_out_min, EInsufficientOutputAmount);
             assert!(amount_b_out < reserve_b, EInsufficientLiquidity);
@@ -290,7 +312,7 @@ module suidex::pool {
             (coin_a_out, coin_b_out)
         } else {
             // User is swapping token B for token A
-            amount_a_out = get_amount_out(amount_b_in, reserve_b, reserve_a, pool.fee_bps);
+            let amount_a_out = get_amount_out(amount_b_in, reserve_b, reserve_a, pool.fee_bps);
             assert!(amount_a_out > 0, EInsufficientOutputAmount);
             assert!(amount_a_out >= amount_a_out_min, EInsufficientOutputAmount);
             assert!(amount_a_out < reserve_a, EInsufficientLiquidity);
