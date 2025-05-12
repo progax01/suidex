@@ -1,0 +1,8 @@
+# Command to add liquidity to your pool
+
+sui client programmable-transaction \
+  --gas 0xb8819a0b28e15e22b0ebc03a28e4849c56ca60cdea11ba6350b6ddae0115d4aa \
+  --gas-budget 10000000 \
+  --inputs 0x178ed2fa4d5ce750e07207ea397b0baf250ac2bc6b0400314597fad082c209c4 0x0df4d26011bbfac830b05a25a968ade12e405f2bf5916b7842fc07a3b7cc34eb 0x29a5155cd34aa75f0c0b82e7cd94fc923c4c2af80edfb9b6d210adf1c97b5d8c 0 0 \
+  --function 0x7cddaeb8b8c472af70162c7644c58c2c56f4da03ddc1f94021b9f3c34bbb9a69::pool::add_liquidity<0x2::sui::SUI,0x2::sui::SUI> \
+  --transfer-to 0xaa127b884072b4be1b803a38fecbb29ccb7bd58ff6a0a01f407e84d9edc8567a
