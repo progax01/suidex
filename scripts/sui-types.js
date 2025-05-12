@@ -9,7 +9,7 @@ const { bcs } = require('@mysten/sui.js/bcs');
  * @param {string} typeName - The fully qualified type name (e.g., '0x2::sui::SUI')
  * @returns {Uint8Array} BCS encoded TypeName
  */
-function encodeTypeName(typeName) {
+function   encodeTypeName(typeName) {
   // Simplified implementation - in a real app you'd need to properly handle
   // struct TypeName { address: address, module: string, name: string }
   const [address, module, name] = parseTypeNameString(typeName);
