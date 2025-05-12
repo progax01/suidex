@@ -418,7 +418,7 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
     //         let split_lp = lp_token::split(&mut lp_tokens, original_balance / 2, ts::ctx(&mut scenario));
             
     //         // Try to split more than available (this should fail)
-    //         let _ = lp_token::split(&mut split_lp, original_balance, ts::ctx(&mut scenario));
+    //         let l= lp_token::split(&mut split_lp, original_balance, ts::ctx(&mut scenario));
             
     //         // These lines won't execute due to the split failing above
     //         transfer::public_transfer(split_lp, USER1);
