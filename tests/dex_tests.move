@@ -1,5 +1,6 @@
 #[test_only]
-module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
+module suidex::dex_tests {    
+    use sui::test_scenario::{Self as ts, Scenario};
     use sui::coin::{Self, Coin};
     use sui::test_utils::assert_eq;
     use sui::transfer;    
@@ -125,6 +126,57 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
         ts::end(scenario);
     }
 
+    // Test adding liquidity using the entry function
+    #[test]
+    fun test_add_liquidity_and_transfer() {
+        let scenario = ts::begin(ADMIN);
+        
+        // Setup tokens, factory, and create pool
+        setup_tokens_and_create_pool(&mut scenario);
+        
+        // Mint tokens for liquidity provider
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let usdc_coin = create_test_usdc(1000000, ts::ctx(&mut scenario)); 
+            let sui_coin = create_test_sui(5000000, ts::ctx(&mut scenario)); 
+            transfer::public_transfer(usdc_coin, USER1);
+            transfer::public_transfer(sui_coin, USER1);
+        };
+        
+        // USER1 adds liquidity using entry function
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            let usdc_coin = ts::take_from_sender<Coin<USDC>>(&scenario);
+            
+            // Add liquidity using entry function
+            router::add_liquidity_and_transfer<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                usdc_coin,
+                0,
+                0,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        
+        // Verify LP tokens were transferred to USER1
+        ts::next_tx(&mut scenario, USER1);
+        {
+            assert!(ts::has_most_recent_for_address<LP<SUI, USDC>>(USER1), 4);
+        };
+        
+        ts::end(scenario);
+    }
+
     #[test]
     fun test_add_liquidity_exact_min_amounts() {
         let scenario = ts::begin(ADMIN);
@@ -192,6 +244,42 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
         ts::end(scenario);
     }
 
+    // Test removing liquidity using the entry function
+    #[test]
+    fun test_remove_liquidity_and_transfer() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+            
+            // Remove liquidity using entry function
+            router::remove_liquidity_and_transfer<SUI, USDC>(
+                &factory,
+                &mut pool,
+                lp_tokens,
+                0,
+                0,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        
+        // Verify USER1 received both coins
+        ts::next_tx(&mut scenario, USER1);
+        {
+            assert!(ts::has_most_recent_for_address<Coin<SUI>>(USER1), 6);
+            assert!(ts::has_most_recent_for_address<Coin<USDC>>(USER1), 7);
+        };
+        
+        ts::end(scenario);
+    }
+
     #[test]
     #[expected_failure(abort_code = 2, location = suidex::pool)]
     fun test_swap_min_amount_out_too_high() {
@@ -255,6 +343,46 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
         };
         ts::end(scenario);
     }    
+
+    // Test swapping using entry function
+    #[test]
+    fun test_swap_exact_input_and_transfer() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let sui_coin = create_test_sui(1000000, ts::ctx(&mut scenario));
+            transfer::public_transfer(sui_coin, USER2);
+        };
+        ts::next_tx(&mut scenario, USER2);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            
+            // Swap using entry function
+            router::swap_exact_input_and_transfer<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                0,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        
+        // Verify USER2 received USDC
+        ts::next_tx(&mut scenario, USER2);
+        {
+            assert!(ts::has_most_recent_for_address<Coin<USDC>>(USER2), 8);
+        };
+        
+        ts::end(scenario);
+    }
+
     // Test swapping tokens
     #[test]
     fun test_swap() {
@@ -401,34 +529,91 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
         
         ts::end(scenario);
     }   
-    // #[test]
-    // #[expected_failure(abort_code = 0, location = suidex::lp_token)]
-    // fun test_lp_token_burn_insufficient_balance() {
-    //     let scenario = ts::begin(ADMIN);
-    //     setup_pool_with_liquidity(&mut scenario);
-    //     ts::next_tx(&mut scenario, USER1);
-    //     {
-    //         let factory = ts::take_shared<DexFactory>(&scenario);
-    //         let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
-    //         let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
-            
-    //         let original_balance = lp_token::balance(&lp_tokens);
 
-    //         // Split LP tokens into half
-    //         let split_lp = lp_token::split(&mut lp_tokens, original_balance / 2, ts::ctx(&mut scenario));
+    // Test swapping with exact output
+    #[test]
+    fun test_swap_exact_output() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let sui_coin = create_test_sui(2000000, ts::ctx(&mut scenario));
+            transfer::public_transfer(sui_coin, USER2);
+        };
+        ts::next_tx(&mut scenario, USER2);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
             
-    //         // Try to split more than available (this should fail)
-    //         let l= lp_token::split(&mut split_lp, original_balance, ts::ctx(&mut scenario));
+            // Define an exact amount of USDC to receive
+            let exact_out = 100000; // 0.1 USDC
             
-    //         // These lines won't execute due to the split failing above
-    //         transfer::public_transfer(split_lp, USER1);
-    //         transfer::public_transfer(lp_tokens, USER1);
+            // Swap for exact output
+            let (usdc_out, sui_remaining) = router::swap_exact_output<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                exact_out,
+                0,
+                ts::ctx(&mut scenario)
+            );
             
-    //         ts::return_shared(factory);
-    //         ts::return_shared(pool);
-    //     };
-    //     ts::end(scenario);
-    // }
+            // Verify exact amount out and remaining SUI
+            assert!(coin::value(&usdc_out) == exact_out, 201);
+            assert!(coin::value(&sui_remaining) > 0, 202); // Should have some SUI remaining
+            
+            transfer::public_transfer(usdc_out, USER2);
+            transfer::public_transfer(sui_remaining, USER2);
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        ts::end(scenario);
+    }
+
+    // Test swapping with exact output using entry function
+    #[test]
+    fun test_swap_exact_output_and_transfer() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, ADMIN);
+        {
+            let sui_coin = create_test_sui(2000000, ts::ctx(&mut scenario));
+            transfer::public_transfer(sui_coin, USER2);
+        };
+        ts::next_tx(&mut scenario, USER2);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(&scenario);
+            
+            // Define an exact amount of USDC to receive
+            let exact_out = 100000; // 0.1 USDC
+            
+            // Swap for exact output using entry function
+            router::swap_exact_output_and_transfer<SUI, USDC>(
+                &factory,
+                &mut pool,
+                sui_coin,
+                exact_out,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        
+        // Verify USER2 received both USDC and remaining SUI
+        ts::next_tx(&mut scenario, USER2);
+        {
+            assert!(ts::has_most_recent_for_address<Coin<USDC>>(USER2), 203);
+            assert!(ts::has_most_recent_for_address<Coin<SUI>>(USER2), 204);
+        };
+        
+        ts::end(scenario);
+    }
 
     #[test]
     fun test_lp_token_split_join() {
@@ -440,7 +625,8 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
             let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
             let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
             
-            let original_balance = lp_token::balance(&lp_tokens);            let half_balance = original_balance / 2;
+            let original_balance = lp_token::balance(&lp_tokens);            
+            let half_balance = original_balance / 2;
             
             // Split LP tokens - Note: due to Move's integer division, we need to handle rounding
             let split_lp = lp_token::split(&mut lp_tokens, half_balance, ts::ctx(&mut scenario));
@@ -470,7 +656,7 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
             let factory = ts::take_shared<DexFactory>(&scenario);
             let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
             let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
-              let balance = lp_token::balance(&lp_tokens);
+            let balance = lp_token::balance(&lp_tokens);
             // Try to split more than available
             let split_lp = lp_token::split(&mut lp_tokens, balance + 1, ts::ctx(&mut scenario));
             transfer::public_transfer(split_lp, USER1);
@@ -569,18 +755,18 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
             let factory = ts::take_shared<DexFactory>(scenario);
             let pool = ts::take_shared<Pool<SUI, USDC>>(scenario);
             
-            let sui_coin = ts::take_from_sender<Coin<SUI>>(scenario); // SUI is token A
-            let usdc_coin = ts::take_from_sender<Coin<USDC>>(scenario); // USDC is token B
+            let sui_coin = ts::take_from_sender<Coin<SUI>>(scenario);
+            let usdc_coin = ts::take_from_sender<Coin<USDC>>(scenario);
             
             // Add liquidity
             let lp_tokens = router::add_liquidity<SUI, USDC>(
                 &factory,
                 &mut pool,
-                sui_coin, // coin_a
-                usdc_coin, // coin_b
-                0, // min amounts (no slippage check for test)
+                sui_coin,
+                usdc_coin,
                 0,
-                0, // no deadline
+                0,
+                0,
                 ts::ctx(scenario)
             );
             
@@ -590,7 +776,7 @@ module suidex::dex_tests {    use sui::test_scenario::{Self as ts, Scenario};
             ts::return_shared(pool);
         };
     }
-
+    
     #[test]
     #[expected_failure(abort_code = 0, location = suidex::factory)]
     fun test_create_pool_already_exists() {
