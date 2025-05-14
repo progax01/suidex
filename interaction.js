@@ -6,7 +6,7 @@ const { fromB64 } = require('@mysten/sui.js/utils');
 const { decodeSuiPrivateKey } = require('@mysten/sui.js/cryptography');
 
 // Package ID from publishing the contract
-const DEFAULT_PACKAGE_ID = '0x105f3805ed2f4d2231b1a96bc58bcc009725734ee2c1f0d68ca682f4980a57dc';
+const DEFAULT_PACKAGE_ID = '0xc65e705ddf9438293b11072db983ce1aa77f36ae80cd1f9f888653851500ee1a';
 
 // Constants
 const MODULE_FACTORY = 'factory';

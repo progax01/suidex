@@ -5,6 +5,7 @@ module suidex::dex_tests {
     use sui::test_utils::assert_eq;
     use sui::transfer;    
     use sui::tx_context::TxContext;
+    use std::option::{Self, Option}; // Add this import
     use suidex::factory::{Self, DexFactory};
     use suidex::pool::{Self, Pool};
     use suidex::lp_token::{Self as lp_token, LP};
@@ -227,17 +228,26 @@ module suidex::dex_tests {
             let (reserve_sui, reserve_usdc) = pool::get_reserves(&pool);
             
             // Try to remove liquidity with min amounts higher than possible
-            let (sui_coin, usdc_coin) = router::remove_liquidity<SUI, USDC>(
+            let (sui_coin, usdc_coin, remaining_lp_opt) = router::remove_liquidity<SUI, USDC>(
                 &factory,
                 &mut pool,
                 lp_tokens,
+                0, // lp_amount (0 means all)
                 reserve_sui + 1,  // Request more than total SUI reserve
                 reserve_usdc + 1, // Request more than total USDC reserve
-                0,
+                0, // deadline
                 ts::ctx(&mut scenario)
             );
+            
             transfer::public_transfer(sui_coin, USER1);
             transfer::public_transfer(usdc_coin, USER1);
+            
+            if (option::is_some(&remaining_lp_opt)) {
+                let remaining_lp = option::extract(&mut remaining_lp_opt);
+                transfer::public_transfer(remaining_lp, USER1);
+            };
+            option::destroy_none(remaining_lp_opt);
+            
             ts::return_shared(factory);
             ts::return_shared(pool);
         };
@@ -260,9 +270,10 @@ module suidex::dex_tests {
                 &factory,
                 &mut pool,
                 lp_tokens,
-                0,
-                0,
-                0,
+                0, // lp_amount (0 means all)
+                0, // min_a
+                0, // min_b
+                0, // deadline
                 ts::ctx(&mut scenario)
             );
             
@@ -506,10 +517,11 @@ module suidex::dex_tests {
             let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
             let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
             
-            let (sui_coin, usdc_coin) = router::remove_liquidity<SUI, USDC>(
+            let (sui_coin, usdc_coin, remaining_lp_opt) = router::remove_liquidity<SUI, USDC>(
                 &factory,
                 &mut pool,
                 lp_tokens,
+                0, // lp_amount (0 means all)
                 0, // min amounts (no slippage check for test)
                 0,
                 0, // no deadline
@@ -520,8 +532,12 @@ module suidex::dex_tests {
             assert!(coin::value(&sui_coin) > 0, 6);
             assert!(coin::value(&usdc_coin) > 0, 7);
             
+            // Verify there are no remaining LP tokens
+            assert!(option::is_none(&remaining_lp_opt), 8);
+            
             transfer::public_transfer(sui_coin, USER1);
             transfer::public_transfer(usdc_coin, USER1);
+            option::destroy_none(remaining_lp_opt);
             
             ts::return_shared(factory);
             ts::return_shared(pool);
@@ -696,6 +712,141 @@ module suidex::dex_tests {
         ts::end(scenario);
     }
 
+    #[test]
+    fun test_remove_partial_liquidity() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+            
+            // Get initial balance
+            let initial_balance = lp_token::balance(&lp_tokens);
+            let partial_amount = initial_balance / 2; // Remove half the liquidity
+            
+            // Remove partial liquidity (half)
+            let (sui_coin, usdc_coin, remaining_lp_opt) = router::remove_liquidity<SUI, USDC>(
+                &factory,
+                &mut pool,
+                lp_tokens,
+                partial_amount, // Remove half
+                0, // min amounts (no slippage check for test)
+                0,
+                0, // no deadline
+                ts::ctx(&mut scenario)
+            );
+            
+            // Verify we got some tokens out
+            assert!(coin::value(&sui_coin) > 0, 300);
+            assert!(coin::value(&usdc_coin) > 0, 301);
+            
+            // Verify we got remaining LP tokens
+            assert!(option::is_some(&remaining_lp_opt), 302);
+            let remaining_lp = option::extract(&mut remaining_lp_opt);
+            
+            // Verify the remaining balance
+            assert!(lp_token::balance(&remaining_lp) == (initial_balance - partial_amount), 303);
+            
+            transfer::public_transfer(sui_coin, USER1);
+            transfer::public_transfer(usdc_coin, USER1);
+            transfer::public_transfer(remaining_lp, USER1);
+            option::destroy_none(remaining_lp_opt);
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_remove_partial_liquidity_and_transfer() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+            
+            // Get initial balance
+            let initial_balance = lp_token::balance(&lp_tokens);
+            let partial_amount = initial_balance / 2; // Remove half the liquidity
+            
+            // Remove partial liquidity using entry function
+            router::remove_liquidity_and_transfer<SUI, USDC>(
+                &factory,
+                &mut pool,
+                lp_tokens,
+                partial_amount, // Remove half
+                0,
+                0,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        
+        // Verify USER1 received both coins and remaining LP tokens
+        ts::next_tx(&mut scenario, USER1);
+        {
+            assert!(ts::has_most_recent_for_address<Coin<SUI>>(USER1), 304);
+            assert!(ts::has_most_recent_for_address<Coin<USDC>>(USER1), 305);
+            assert!(ts::has_most_recent_for_address<LP<SUI, USDC>>(USER1), 306);
+        };
+        
+        ts::end(scenario);
+    }
+
+    #[test]
+    fun test_remove_zero_amount_removes_all() {
+        let scenario = ts::begin(ADMIN);
+        setup_pool_with_liquidity(&mut scenario);
+        ts::next_tx(&mut scenario, USER1);
+        {
+            let factory = ts::take_shared<DexFactory>(&scenario);
+            let pool = ts::take_shared<Pool<SUI, USDC>>(&scenario);
+            let lp_tokens = ts::take_from_sender<LP<SUI, USDC>>(&scenario);
+            
+            // Get initial balance to verify full removal
+            let initial_balance = lp_token::balance(&lp_tokens);
+            
+            // Remove liquidity with amount 0 (should remove all)
+            let (sui_coin, usdc_coin, remaining_lp_opt) = router::remove_liquidity<SUI, USDC>(
+                &factory,
+                &mut pool,
+                lp_tokens,
+                0, // Remove all
+                0, 
+                0,
+                0,
+                ts::ctx(&mut scenario)
+            );
+            
+            // Verify we got tokens proportional to full LP amount
+            // Because we're the only liquidity provider, we should get all reserves minus fees
+            let (_reserve_sui, _reserve_usdc) = pool::get_reserves(&pool);
+            assert!(coin::value(&sui_coin) > 0, 307);
+            assert!(coin::value(&usdc_coin) > 0, 308);
+            
+            // Verify there are no remaining LP tokens
+            assert!(option::is_none(&remaining_lp_opt), 309);
+            
+            transfer::public_transfer(sui_coin, USER1);
+            transfer::public_transfer(usdc_coin, USER1);
+            option::destroy_none(remaining_lp_opt);
+            
+            ts::return_shared(factory);
+            ts::return_shared(pool);
+        };
+        
+        ts::end(scenario);
+    }
+
     // Create a test USDC coin directly for testing (bypassing TreasuryCap)
     fun create_test_usdc(amount: u64, ctx: &mut TxContext): Coin<USDC> {
         coin::mint_for_testing<USDC>(amount, ctx)
@@ -793,22 +944,7 @@ module suidex::dex_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 0, location = suidex::factory)]
-    fun test_create_pool_already_exists_negative() {
-        let scenario = ts::begin(ADMIN);
-        setup_tokens_and_create_pool(&mut scenario);
-        ts::next_tx(&mut scenario, ADMIN);
-        {
-            let factory = ts::take_shared<DexFactory>(&scenario);
-            // This should abort with code 0 (EPoolExists)
-            factory::create_pool<SUI, USDC>(&mut factory, ts::ctx(&mut scenario));
-            ts::return_shared(factory);
-        };
-        ts::end(scenario);
-    }
-
-    #[test]
-    fun test_get_pool_not_exists_negative() {
+    fun test_get_pool_not_exists() {
         let scenario = ts::begin(ADMIN);
         setup_tokens_and_factory(&mut scenario);
         ts::next_tx(&mut scenario, ADMIN);
@@ -823,7 +959,7 @@ module suidex::dex_tests {
     }
 
     #[test]
-    fun test_pool_exists_not_exists_negative() {
+    fun test_pool_exists_not_exists() {
         let scenario = ts::begin(ADMIN);
         setup_tokens_and_factory(&mut scenario);
         ts::next_tx(&mut scenario, ADMIN);

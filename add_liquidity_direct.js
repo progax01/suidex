@@ -6,16 +6,16 @@ const { fromB64 } = require('@mysten/sui.js/utils');
 const { decodeSuiPrivateKey } = require('@mysten/sui.js/cryptography');
 
 // Configuration
-const PACKAGE_ID = '0x105f3805ed2f4d2231b1a96bc58bcc009725734ee2c1f0d68ca682f4980a57dc';
-const FACTORY_ID = '0xd8a787d9255dcb85aac4f641605655851fc18628b6a3fa4dd2ebbb5de53bf707';
-const POOL_ID = '0x4e2a8cdb2a877a6ae57a91b31768cec65b29d8b89bd37b3bb8d1f8d9942e5e3f';
+const PACKAGE_ID = '0xc65e705ddf9438293b11072db983ce1aa77f36ae80cd1f9f888653851500ee1a';
+const FACTORY_ID = '0xb074f43839fcda53eab615670a4fde90b9481f2ff9581f9ddb0a62b922f6b650';
+const POOL_ID = '0x2affc3208eeecb13bf633d01ea740f17b037dd64340f2c20fdec0f6107186a28';
 const COIN_TYPE_A = '0x2::sui::SUI';
 const COIN_TYPE_B = '0x2::clock::Clock';
-const COIN_A_ID = '0x5d432cecbd191678eb0f518b657e01f147e9158c9e4e2deb15a2013032d6ed91';
+const COIN_A_ID = '0x8ab2b839445d24ac55fa73c25bbb07450360fecd5c9f54589428e2d631d81765';
 const COIN_B_ID = '0x6';
 const AMOUNT_A_MIN = 1000;
 const AMOUNT_B_MIN = 1;
-const DEADLINE = 743;
+const DEADLINE = 744;
 const GAS_BUDGET = 10000000;
 const PRIVATE_KEY = process.env.SUI_PRIVATE_KEY || 'suiprivkey1qr8yacxzuu66a7f2j0hsr0xew9jk3ylvcp4mjms3us88uw7u2k8dg835jz4';
 
