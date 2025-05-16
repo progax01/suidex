@@ -1,3 +1,4 @@
+// 1. Add the destroy_zero function to lp_token.move
 module suidex::lp_token {
     use sui::object::{Self, UID};
     use sui::tx_context::{Self, TxContext};
@@ -127,4 +128,11 @@ module suidex::lp_token {
     public fun total_supply<X, Y>(cap: &LPCap<X, Y>): u64 {
         balance::supply_value(&cap.supply)
     }
-} 
+    
+    /// Destroy an LP token with zero balance
+    public fun destroy_zero<X, Y>(lp: LP<X, Y>) {
+        let LP { id, balance } = lp;
+        assert!(balance == 0, 0); // Error if balance is not zero
+        object::delete(id);
+    }
+}

@@ -1,3 +1,4 @@
+// 2. Update the remove_liquidity function in pool.move
 module suidex::pool {
     use sui::object::{Self, UID};
     use sui::tx_context::{Self, TxContext};
@@ -239,7 +240,9 @@ module suidex::pool {
         
         // Burn the LP tokens
         lp_token::burn(&mut pool.lp_cap, &mut lp, lp_amount, ctx);
-        lp_token::transfer(lp, tx_context::sender(ctx));
+        
+        // Delete the zero-balance LP token instead of transferring it
+        lp_token::destroy_zero(lp);
         
         // Update pool state
         pool.total_supply = pool.total_supply - lp_amount;
