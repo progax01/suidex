@@ -1,4 +1,3 @@
-// 2. Update the remove_liquidity function in pool.move
 module suidex::pool {
     use sui::object::{Self, UID};
     use sui::tx_context::{Self, TxContext};
@@ -13,6 +12,8 @@ module suidex::pool {
     const FEE_DENOMINATOR: u64 = 10000;
     const DEFAULT_FEE_BPS: u64 = 30; // 0.3%
     const MINIMAL_LIQUIDITY: u64 = 1000; // Prevent division by zero
+    const SCALE_FACTOR: u64 = 1000000; // Used for scaling large numbers
+    const U64_MAX: u64 = 18446744073709551615; // Maximum value of u64
 
     // Errors
     const EZeroAmount: u64 = 0;
@@ -131,9 +132,32 @@ module suidex::pool {
             assert!(amount_a >= amount_a_min, EInsufficientLiquidity);
             assert!(amount_b >= amount_b_min, EInsufficientLiquidity);
         } else {
-            // Calculate amounts based on the ratio
-            amount_b = u64::min((coin_a_value * reserve_b) / reserve_a, coin_b_value);
-            amount_a = (amount_b * reserve_a) / reserve_b;
+            // Safe calculation path for large numbers
+            // Use scaling to prevent overflow
+            let is_large_number = coin_a_value > (U64_MAX / reserve_b) || reserve_a > (U64_MAX / 100) || reserve_b > (U64_MAX / 100);
+            
+            if (is_large_number) {
+                // Scale down to prevent overflow
+                let scaled_a_value = safe_div(coin_a_value, SCALE_FACTOR);
+                let scaled_reserve_a = safe_div(reserve_a, SCALE_FACTOR);
+                let scaled_reserve_b = safe_div(reserve_b, SCALE_FACTOR);
+                
+                // Ensure scaled values are not zero
+                let safe_scaled_reserve_a = if (scaled_reserve_a == 0) { 1 } else { scaled_reserve_a };
+                
+                // Calculate scaled amount_b
+                let scaled_amount_b = safe_div(safe_mul(scaled_a_value, scaled_reserve_b), safe_scaled_reserve_a);
+                amount_b = u64::min(safe_mul(scaled_amount_b, SCALE_FACTOR), coin_b_value);
+                
+                // Calculate amount_a based on amount_b
+                let safe_scaled_reserve_b = if (scaled_reserve_b == 0) { 1 } else { scaled_reserve_b };
+                let scaled_amount_a = safe_div(safe_mul(safe_div(amount_b, SCALE_FACTOR), scaled_reserve_a), safe_scaled_reserve_b);
+                amount_a = safe_mul(scaled_amount_a, SCALE_FACTOR);
+            } else {
+                // Standard calculation for smaller numbers
+                amount_b = u64::min(safe_div(safe_mul(coin_a_value, reserve_b), reserve_a), coin_b_value);
+                amount_a = safe_div(safe_mul(amount_b, reserve_a), reserve_b);
+            };
             
             // Check slippage
             assert!(amount_a >= amount_a_min, EInsufficientLiquidity);
@@ -144,17 +168,10 @@ module suidex::pool {
         let lp_amount: u64;
         if (pool.total_supply == 0) {
             // Initial liquidity - use sqrt(a * b) - MINIMAL_LIQUIDITY
-            // For safety with large numbers, use a simpler calculation for the initial provision
-            // Check if multiplication would overflow by using a safer approach
-            let product = if (amount_a > 0 && amount_b > (18446744073709551615 / amount_a)) {
-                // If the product would overflow, scale down the numbers
-                let scaled_a = amount_a / 1000;
-                let scaled_b = amount_b / 1000;
-                scaled_a * scaled_b
-            } else {
-                amount_a * amount_b
-            };
+            // Safe calculation for large numbers
+            let product = safe_mul_and_scale(amount_a, amount_b);
             
+            // Use square root calculation
             lp_amount = u64::sqrt(product);
             
             // Ensure we don't underflow when subtracting MINIMAL_LIQUIDITY
@@ -167,9 +184,33 @@ module suidex::pool {
             pool.total_supply = lp_amount + MINIMAL_LIQUIDITY;
         } else {
             // Subsequent liquidity - min(a/A, b/B) * totalSupply
-            let lp_amount_a = (amount_a * pool.total_supply) / reserve_a;
-            let lp_amount_b = (amount_b * pool.total_supply) / reserve_b;
-            lp_amount = u64::min(lp_amount_a, lp_amount_b);
+            // Safe calculation for large numbers
+            let is_large_number = amount_a > (U64_MAX / pool.total_supply) || 
+                                 amount_b > (U64_MAX / pool.total_supply) ||
+                                 pool.total_supply > (U64_MAX / 100);
+            
+            if (is_large_number) {
+                let scaled_amount_a = safe_div(amount_a, SCALE_FACTOR);
+                let scaled_amount_b = safe_div(amount_b, SCALE_FACTOR);
+                let scaled_reserve_a = safe_div(reserve_a, SCALE_FACTOR);
+                let scaled_reserve_b = safe_div(reserve_b, SCALE_FACTOR);
+                let scaled_total_supply = safe_div(pool.total_supply, SCALE_FACTOR);
+                
+                // Ensure scaled values are not zero
+                let safe_scaled_reserve_a = if (scaled_reserve_a == 0) { 1 } else { scaled_reserve_a };
+                let safe_scaled_reserve_b = if (scaled_reserve_b == 0) { 1 } else { scaled_reserve_b };
+                
+                let scaled_lp_amount_a = safe_div(safe_mul(scaled_amount_a, scaled_total_supply), safe_scaled_reserve_a);
+                let scaled_lp_amount_b = safe_div(safe_mul(scaled_amount_b, scaled_total_supply), safe_scaled_reserve_b);
+                
+                let scaled_lp_amount = u64::min(scaled_lp_amount_a, scaled_lp_amount_b);
+                lp_amount = safe_mul(scaled_lp_amount, SCALE_FACTOR);
+            } else {
+                let lp_amount_a = safe_div(safe_mul(amount_a, pool.total_supply), reserve_a);
+                let lp_amount_b = safe_div(safe_mul(amount_b, pool.total_supply), reserve_b);
+                lp_amount = u64::min(lp_amount_a, lp_amount_b);
+            };
+            
             pool.total_supply = pool.total_supply + lp_amount;
         };
         
@@ -214,6 +255,55 @@ module suidex::pool {
         lp
     }
 
+    /// Helper function to safely multiply two numbers with overflow protection
+    fun safe_mul(a: u64, b: u64): u64 {
+        if (a == 0 || b == 0) {
+            return 0
+        };
+        
+        if (a > (U64_MAX / b)) {
+            // Overflow would occur, use scaling
+            let scaled_a = a / SCALE_FACTOR;
+            let scaled_b = b / SCALE_FACTOR;
+            
+            // Handle zero cases after scaling
+            if (scaled_a == 0) scaled_a = 1;
+            if (scaled_b == 0) scaled_b = 1;
+            
+            (scaled_a * scaled_b) * SCALE_FACTOR
+        } else {
+            a * b
+        }
+    }
+
+    /// Helper function to safely divide two numbers with division by zero protection
+    fun safe_div(a: u64, b: u64): u64 {
+        if (b == 0) {
+            // Prevent division by zero
+            if (a == 0) return 0;
+            return a // or a more appropriate fallback value
+        };
+        
+        a / b
+    }
+
+    /// Helper function to safely multiply large numbers with scaling
+    fun safe_mul_and_scale(a: u64, b: u64): u64 {
+        if (a > (U64_MAX / b)) {
+            // Overflow would occur, use scaling
+            let scaled_a = a / SCALE_FACTOR;
+            let scaled_b = b / SCALE_FACTOR;
+            
+            // Handle zero cases after scaling
+            if (scaled_a == 0) scaled_a = 1;
+            if (scaled_b == 0) scaled_b = 1;
+            
+            scaled_a * scaled_b
+        } else {
+            a * b
+        }
+    }
+
     /// Remove liquidity from the pool
     public fun remove_liquidity<CoinTypeA, CoinTypeB>(
         pool: &mut Pool<CoinTypeA, CoinTypeB>,
@@ -232,8 +322,32 @@ module suidex::pool {
         let reserve_a = balance::value(&pool.reserve_a);
         let reserve_b = balance::value(&pool.reserve_b);
         
-        let amount_a = (lp_amount * reserve_a) / pool.total_supply;
-        let amount_b = (lp_amount * reserve_b) / pool.total_supply;
+        // Safe calculation for large numbers
+        let is_large_number = lp_amount > (U64_MAX / reserve_a) || 
+                             lp_amount > (U64_MAX / reserve_b) ||
+                             pool.total_supply > (U64_MAX / 100);
+                             
+        let amount_a: u64;
+        let amount_b: u64;
+        
+        if (is_large_number) {
+            let scaled_lp_amount = safe_div(lp_amount, SCALE_FACTOR);
+            let scaled_reserve_a = safe_div(reserve_a, SCALE_FACTOR);
+            let scaled_reserve_b = safe_div(reserve_b, SCALE_FACTOR);
+            let scaled_total_supply = safe_div(pool.total_supply, SCALE_FACTOR);
+            
+            // Ensure scaled values are not zero
+            let safe_scaled_total_supply = if (scaled_total_supply == 0) { 1 } else { scaled_total_supply };
+            
+            let scaled_amount_a = safe_div(safe_mul(scaled_lp_amount, scaled_reserve_a), safe_scaled_total_supply);
+            let scaled_amount_b = safe_div(safe_mul(scaled_lp_amount, scaled_reserve_b), safe_scaled_total_supply);
+            
+            amount_a = safe_mul(scaled_amount_a, SCALE_FACTOR);
+            amount_b = safe_mul(scaled_amount_b, SCALE_FACTOR);
+        } else {
+            amount_a = safe_div(safe_mul(lp_amount, reserve_a), pool.total_supply);
+            amount_b = safe_div(safe_mul(lp_amount, reserve_b), pool.total_supply);
+        };
         
         assert!(amount_a >= amount_a_min, EInsufficientLiquidity);
         assert!(amount_b >= amount_b_min, EInsufficientLiquidity);
@@ -357,11 +471,34 @@ module suidex::pool {
         assert!(amount_in > 0, EInsufficientInputAmount);
         assert!(reserve_in > 0 && reserve_out > 0, EInsufficientLiquidity);
         
-        let amount_in_with_fee = amount_in * (FEE_DENOMINATOR - fee_bps);
-        let numerator = amount_in_with_fee * reserve_out;
-        let denominator = reserve_in * FEE_DENOMINATOR + amount_in_with_fee;
+        // Safe calculation for large numbers
+        let is_large_number = amount_in > (U64_MAX / (FEE_DENOMINATOR - fee_bps)) || 
+                             reserve_out > (U64_MAX / 100);
         
-        numerator / denominator
+        if (is_large_number) {
+            let scaled_amount_in = safe_div(amount_in, SCALE_FACTOR);
+            let scaled_reserve_in = safe_div(reserve_in, SCALE_FACTOR);
+            let scaled_reserve_out = safe_div(reserve_out, SCALE_FACTOR);
+            
+            // Ensure scaled values are not zero
+            let safe_scaled_amount_in = if (scaled_amount_in == 0) { 1 } else { scaled_amount_in };
+            let safe_scaled_reserve_in = if (scaled_reserve_in == 0) { 1 } else { scaled_reserve_in };
+            
+            let scaled_amount_in_with_fee = safe_mul(safe_scaled_amount_in, FEE_DENOMINATOR - fee_bps);
+            let scaled_numerator = safe_mul(scaled_amount_in_with_fee, scaled_reserve_out);
+            let scaled_denominator = safe_mul(safe_scaled_reserve_in, FEE_DENOMINATOR) + scaled_amount_in_with_fee;
+            
+            let safe_scaled_denominator = if (scaled_denominator == 0) { 1 } else { scaled_denominator };
+            
+            let scaled_result = safe_div(scaled_numerator, safe_scaled_denominator);
+            safe_mul(scaled_result, SCALE_FACTOR)
+        } else {
+            let amount_in_with_fee = amount_in * (FEE_DENOMINATOR - fee_bps);
+            let numerator = amount_in_with_fee * reserve_out;
+            let denominator = reserve_in * FEE_DENOMINATOR + amount_in_with_fee;
+            
+            numerator / denominator
+        }
     }
 
     /// Get pool reserves
