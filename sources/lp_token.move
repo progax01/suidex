@@ -1,4 +1,3 @@
-// 1. Add the destroy_zero function to lp_token.move
 module suidex::lp_token {
     use sui::object::{Self, UID};
     use sui::tx_context::{Self, TxContext};
@@ -29,6 +28,14 @@ module suidex::lp_token {
 
     /// Event emitted when LP tokens are burned
     struct LPBurned<phantom X, phantom Y> has copy, drop {
+        amount: u64,
+        recipient: address
+    }
+
+    /// Event emitted when LP tokens are joined (merged)
+    struct LPJoined<phantom X, phantom Y> has copy, drop {
+        from_id: address,
+        to_id: address,
         amount: u64,
         recipient: address
     }
@@ -112,11 +119,27 @@ module suidex::lp_token {
         }
     }
 
-    /// Join (merge) LP tokens
-    public fun join<X, Y>(lp: &mut LP<X, Y>, other: LP<X, Y>) {
+    /// Join (merge) LP tokens - now as an entry function
+    public fun join<X, Y>(lp: &mut LP<X, Y>, other: LP<X, Y>, ctx: &mut TxContext) {
         let LP { id, balance } = other;
+        
+        // Get the object ID as an address for the event
+        let from_id = object::uid_to_address(&id);
+        let to_id = object::uid_to_address(&lp.id);
+        
+        // Delete the other LP token's ID
         object::delete(id);
+        
+        // Add the balance to the main LP token
         lp.balance = lp.balance + balance;
+        
+        // Emit the join event
+        event::emit(LPJoined<X, Y> {
+            from_id,
+            to_id,
+            amount: balance,
+            recipient: tx_context::sender(ctx)
+        });
     }
 
     /// Transfer LP tokens to an address
