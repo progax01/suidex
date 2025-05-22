@@ -22,9 +22,6 @@ module suidex::pool {
     const EInsufficientInputAmount: u64 = 3;
     const EInvalidK: u64 = 4;
     const EInsufficientLiquidityMinted: u64 = 5;
-    // const EInsufficientLiquidityBurned: u64 = 6;
-    // const EInsufficientBalance: u64 = 7;
-    // const EOrderMismatch: u64 = 8;
 
     /// The pool struct representing a trading pair
     struct Pool<phantom CoinTypeA, phantom CoinTypeB> has key {
@@ -462,56 +459,57 @@ module suidex::pool {
     }
 
     /// Calculate the output amount based on the input amount and reserves
-   /// Calculate the output amount based on the input amount and reserves
-public fun get_amount_out(
-    amount_in: u64,
-    reserve_in: u64,
-    reserve_out: u64,
-    fee_bps: u64
-): u64 {
-    assert!(amount_in > 0, EInsufficientInputAmount);
-    assert!(reserve_in > 0 && reserve_out > 0, EInsufficientLiquidity);
-    
-    // Extreme case handling - prevent any possible overflow
-    if (reserve_in > 10000000000000 || reserve_out > 10000000000000) {
-        // For very large reserves, use double scaling approach
+    public fun get_amount_out(
+        amount_in: u64,
+        reserve_in: u64,
+        reserve_out: u64,
+        fee_bps: u64
+    ): u64 {
+        assert!(amount_in > 0, EInsufficientInputAmount);
+        assert!(reserve_in > 0 && reserve_out > 0, EInsufficientLiquidity);
         
-        // Scale down reserves by 10^8 first
-        let big_scale = 100000000; // 10^8
-        let scaled_reserve_in = reserve_in / big_scale;
-        let scaled_reserve_out = reserve_out / big_scale;
+        // Standard Uniswap formula: amount_out = (amount_in * (10000 - fee_bps) * reserve_out) / (reserve_in * 10000 + amount_in * (10000 - fee_bps))
+        let amount_in_with_fee = safe_mul(amount_in, (FEE_DENOMINATOR - fee_bps));
         
-        // Now do the calculation with scaled values
-        let amount_in_with_fee = amount_in * (FEE_DENOMINATOR - fee_bps);
+        // Check if we need to use scaled calculation for large numbers
+        let is_large_number = amount_in_with_fee > (U64_MAX / reserve_out) || 
+                             reserve_in > (U64_MAX / FEE_DENOMINATOR) ||
+                             amount_in_with_fee > (U64_MAX / 100);
         
-        // Calculate more safely with staged operations
-        let stage1 = amount_in_with_fee / FEE_DENOMINATOR; // simplified from x * (D-f) / D
-        
-        if (stage1 == 0) {
-            // Amount is too small for meaningful exchange, prevent division by zero
-            return 0
-        };
-        
-        // Calculate ratio of reserves scaled down
-        // output = input * rate * (1 - fee)
-        let exchange_rate = scaled_reserve_out / scaled_reserve_in;
-        
-        // Apply the exchange rate to determine output amount
-        // This prevents intermediate overflow
-        let output_amount = (amount_in * exchange_rate * (FEE_DENOMINATOR - fee_bps)) / FEE_DENOMINATOR;
-        
-        // Return the calculated output amount
-        return output_amount
-    };
-    
-    // Standard Uniswap formula for more typical values
-    let amount_in_with_fee = amount_in * (FEE_DENOMINATOR - fee_bps);
-    let numerator = amount_in_with_fee * reserve_out;
-    let denominator = reserve_in * FEE_DENOMINATOR + amount_in_with_fee;
-    
-    // Return the calculated output amount
-    numerator / denominator
-}
+        if (is_large_number) {
+            // Use scaling to prevent overflow
+            let scaled_amount_in_with_fee = safe_div(amount_in_with_fee, SCALE_FACTOR);
+            let scaled_reserve_in = safe_div(reserve_in, SCALE_FACTOR);
+            let scaled_reserve_out = safe_div(reserve_out, SCALE_FACTOR);
+            
+            // Ensure scaled values are not zero
+            let safe_scaled_reserve_in = if (scaled_reserve_in == 0) { 1 } else { scaled_reserve_in };
+            let safe_scaled_reserve_out = if (scaled_reserve_out == 0) { 1 } else { scaled_reserve_out };
+            let safe_scaled_amount_in_with_fee = if (scaled_amount_in_with_fee == 0) { 1 } else { scaled_amount_in_with_fee };
+            
+            // Calculate scaled numerator and denominator
+            let scaled_numerator = safe_mul(safe_scaled_amount_in_with_fee, safe_scaled_reserve_out);
+            let scaled_denominator = safe_mul(safe_scaled_reserve_in, FEE_DENOMINATOR) + safe_scaled_amount_in_with_fee;
+            
+            // Ensure denominator is not zero
+            let safe_scaled_denominator = if (scaled_denominator == 0) { 1 } else { scaled_denominator };
+            
+            let scaled_result = safe_div(scaled_numerator, safe_scaled_denominator);
+            
+            // Scale back up
+            safe_mul(scaled_result, SCALE_FACTOR)
+        } else {
+            // Standard calculation for smaller numbers
+            let numerator = safe_mul(amount_in_with_fee, reserve_out);
+            let denominator = safe_mul(reserve_in, FEE_DENOMINATOR) + amount_in_with_fee;
+            
+            // Ensure denominator is not zero
+            let safe_denominator = if (denominator == 0) { 1 } else { denominator };
+            
+            safe_div(numerator, safe_denominator)
+        }
+    }
+
     /// Get pool reserves
     public fun get_reserves<CoinTypeA, CoinTypeB>(pool: &Pool<CoinTypeA, CoinTypeB>): (u64, u64) {
         (balance::value(&pool.reserve_a), balance::value(&pool.reserve_b))
