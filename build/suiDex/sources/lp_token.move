@@ -120,7 +120,7 @@ module suidex::lp_token {
     }
 
     /// Join (merge) LP tokens - now as an entry function
-    public entry fun join<X, Y>(lp: &mut LP<X, Y>, other: LP<X, Y>, ctx: &mut TxContext) {
+    public fun join<X, Y>(lp: &mut LP<X, Y>, other: LP<X, Y>, ctx: &mut TxContext) {
         let LP { id, balance } = other;
         
         // Get the object ID as an address for the event

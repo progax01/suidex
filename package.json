@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "dependencies": {
     "@mysten/sui": "^1.29.1",
     "@mysten/sui.js": "^0.54.1",
