@@ -255,6 +255,45 @@ module suidex::router {
         transfer::public_transfer(coin_out, tx_context::sender(ctx));
     }
 
+    /// Entry function for swapping exact input B to A, always transfers output to sender
+    public entry fun swap_exact_input_b_to_a_and_transfer<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        coin_b_in: Coin<CoinTypeB>,
+        amount_a_out_min: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ) {
+        // Check if the pool exists in the factory
+        let (exists, _) = factory::get_pool<CoinTypeA, CoinTypeB>(factory);
+        assert!(exists, EPoolNotFound);
+        
+        // Check deadline
+        assert!(tx_context::epoch(ctx) <= deadline, EDeadlineExceeded);
+        
+        // Check that input amount is positive
+        assert!(coin::value(&coin_b_in) > 0, EZeroAmount);
+        
+        // Create zero coin for A (required by pool swap interface)
+        let coin_a_in = coin::zero<CoinTypeA>(ctx);
+        
+        // Perform the swap: B -> A
+        let (coin_a_out, coin_b_out) = pool::swap(
+            pool,
+            coin_a_in,          // Must provide both coins, A is zero
+            coin_b_in,          // B is the actual input
+            amount_a_out_min,   // Minimum A tokens we want out
+            0,                  // We don't expect any B tokens back
+            ctx
+        );
+        
+        // Transfer A tokens to the sender
+        transfer::public_transfer(coin_a_out, tx_context::sender(ctx));
+        
+        // Destroy the empty B coin returned by swap
+        coin::destroy_zero(coin_b_out);
+    }
+
     /// Internal function to swap token A for exact amount of token B
     fun swap_exact_output_internal<CoinTypeA, CoinTypeB>(
         factory: &DexFactory,
