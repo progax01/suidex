@@ -2,9 +2,10 @@ module suidex::router {
     use sui::tx_context::{Self, TxContext};
     use sui::coin::{Self, Coin};
     use sui::transfer;
+    use std::option::{Self, Option}; // Add this import
     use suidex::factory::{Self, DexFactory};
     use suidex::pool::{Self, Pool};
-    use suidex::lp_token::{LP};
+    use suidex::lp_token::{Self, LP};
 
     // Error codes
     const EPoolNotFound: u64 = 0;
@@ -13,8 +14,8 @@ module suidex::router {
     const EDeadlineExceeded: u64 = 3;
     const EZeroAmount: u64 = 4;
 
-    /// Adds liquidity to a pool
-    public fun add_liquidity<CoinTypeA, CoinTypeB>(
+    /// Internal function to add liquidity to a pool
+    fun add_liquidity_internal<CoinTypeA, CoinTypeB>(
         factory: &DexFactory,
         pool: &mut Pool<CoinTypeA, CoinTypeB>,
         coin_a: Coin<CoinTypeA>,
@@ -35,16 +36,60 @@ module suidex::router {
         pool::add_liquidity(pool, coin_a, coin_b, amount_a_min, amount_b_min, ctx)
     }
 
-    /// Removes liquidity from a pool
-    public fun remove_liquidity<CoinTypeA, CoinTypeB>(
+    /// Adds liquidity to a pool and returns the LP token
+    /// This function is for other modules to use
+    public fun add_liquidity<CoinTypeA, CoinTypeB>(
         factory: &DexFactory,
         pool: &mut Pool<CoinTypeA, CoinTypeB>,
-        lp: LP<CoinTypeA, CoinTypeB>,
+        coin_a: Coin<CoinTypeA>,
+        coin_b: Coin<CoinTypeB>,
         amount_a_min: u64,
         amount_b_min: u64,
         deadline: u64,
         ctx: &mut TxContext
-    ): (Coin<CoinTypeA>, Coin<CoinTypeB>) {
+    ): LP<CoinTypeA, CoinTypeB> {
+        add_liquidity_internal(factory, pool, coin_a, coin_b, amount_a_min, amount_b_min, deadline, ctx)
+    }
+
+    /// Entry function for adding liquidity, always transfers the LP token to the sender
+    public entry fun add_liquidity_and_transfer<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        coin_a: Coin<CoinTypeA>,
+        coin_b: Coin<CoinTypeB>,
+        amount_a_min: u64,
+        amount_b_min: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ) {
+        let lp = add_liquidity_internal(
+            factory,
+            pool,
+            coin_a,
+            coin_b,
+            amount_a_min,
+            amount_b_min,
+            deadline,
+            ctx
+        );
+        
+        // Transfer the LP token to the sender
+        lp_token::transfer(lp, tx_context::sender(ctx));
+    }
+
+    /// Internal function to remove liquidity from a pool with option for partial removal
+    /// If lp_amount is 0, removes all liquidity from the LP token
+    /// Otherwise, removes the specified amount of liquidity
+    fun remove_liquidity_internal<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        lp: LP<CoinTypeA, CoinTypeB>,
+        lp_amount: u64,  // Amount of LP tokens to burn (0 means all)
+        amount_a_min: u64,
+        amount_b_min: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ): (Coin<CoinTypeA>, Coin<CoinTypeB>, Option<LP<CoinTypeA, CoinTypeB>>) {
         // Check if the pool exists in the factory
         let (exists, _) = factory::get_pool<CoinTypeA, CoinTypeB>(factory);
         assert!(exists, EPoolNotFound);
@@ -52,12 +97,91 @@ module suidex::router {
         // Check deadline
         assert!(tx_context::epoch(ctx) <= deadline, EDeadlineExceeded);
         
-        // Delegate to pool module
-        pool::remove_liquidity(pool, lp, amount_a_min, amount_b_min, ctx)
+        let total_lp_amount = lp_token::balance(&lp);
+        assert!(total_lp_amount > 0, EZeroAmount);
+        
+        // If lp_amount is 0 or greater than/equal to total, remove all
+        if (lp_amount == 0 || lp_amount >= total_lp_amount) {
+            // Use the entire LP token directly
+            let (coin_a, coin_b) = pool::remove_liquidity(
+                pool,
+                lp,
+                amount_a_min,
+                amount_b_min,
+                ctx
+            );
+            (coin_a, coin_b, option::none())
+        } else {
+            // Partial removal - split the LP token
+            let split_lp = lp_token::split(&mut lp, lp_amount, ctx);
+            
+            // Remove liquidity with the split portion
+            let (coin_a, coin_b) = pool::remove_liquidity(
+                pool,
+                split_lp,
+                amount_a_min,
+                amount_b_min,
+                ctx
+            );
+            
+            // Return coins and remaining LP token
+            (coin_a, coin_b, option::some(lp))
+        }
     }
 
-    /// Swap exact amount of token A for token B
-    public fun swap_exact_input<CoinTypeA, CoinTypeB>(
+    /// Removes liquidity from a pool and returns the coins
+    /// If lp_amount is 0, removes all liquidity
+    /// Otherwise, removes the specified amount and returns remaining LP tokens
+    public fun remove_liquidity<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        lp: LP<CoinTypeA, CoinTypeB>,
+        lp_amount: u64,
+        amount_a_min: u64,
+        amount_b_min: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ): (Coin<CoinTypeA>, Coin<CoinTypeB>, Option<LP<CoinTypeA, CoinTypeB>>) {
+        remove_liquidity_internal(factory, pool, lp, lp_amount, amount_a_min, amount_b_min, deadline, ctx)
+    }
+
+    /// Entry function for removing liquidity, always transfers coins and remaining LP to the sender
+    public entry fun remove_liquidity_and_transfer<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        lp: LP<CoinTypeA, CoinTypeB>,
+        lp_amount: u64,  // Amount of LP tokens to burn (0 means all)
+        amount_a_min: u64,
+        amount_b_min: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ) {
+        let (coin_a, coin_b, remaining_lp_opt) = remove_liquidity_internal(
+            factory,
+            pool,
+            lp,
+            lp_amount,
+            amount_a_min,
+            amount_b_min,
+            deadline,
+            ctx
+        );
+        
+        // Transfer both coins to the sender
+        transfer::public_transfer(coin_a, tx_context::sender(ctx));
+        transfer::public_transfer(coin_b, tx_context::sender(ctx));
+        
+        // If there's a remaining LP token, transfer it back to the sender
+        if (option::is_some(&remaining_lp_opt)) {
+            let remaining_lp = option::extract(&mut remaining_lp_opt);
+            transfer::public_transfer(remaining_lp, tx_context::sender(ctx));
+        };
+        
+        option::destroy_none(remaining_lp_opt);
+    }
+
+    /// Internal function to swap exact amount of token A for token B
+    fun swap_exact_input_internal<CoinTypeA, CoinTypeB>(
         factory: &DexFactory,
         pool: &mut Pool<CoinTypeA, CoinTypeB>,
         coin_in: Coin<CoinTypeA>,
@@ -96,8 +220,43 @@ module suidex::router {
         coin_b_out
     }
 
-    /// Swap token A for exact amount of token B
-    public fun swap_exact_output<CoinTypeA, CoinTypeB>(
+    /// Swap exact amount of token A for token B
+    /// This function is for other modules to use
+    public fun swap_exact_input<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        coin_in: Coin<CoinTypeA>,
+        amount_out_min: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ): Coin<CoinTypeB> {
+        swap_exact_input_internal(factory, pool, coin_in, amount_out_min, deadline, ctx)
+    }
+
+    /// Entry function for swapping exact input, always transfers output to sender
+    public entry fun swap_exact_input_and_transfer<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        coin_in: Coin<CoinTypeA>,
+        amount_out_min: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ) {
+        let coin_out = swap_exact_input_internal(
+            factory,
+            pool,
+            coin_in,
+            amount_out_min,
+            deadline,
+            ctx
+        );
+        
+        // Transfer output coin to sender
+        transfer::public_transfer(coin_out, tx_context::sender(ctx));
+    }
+
+    /// Internal function to swap token A for exact amount of token B
+    fun swap_exact_output_internal<CoinTypeA, CoinTypeB>(
         factory: &DexFactory,
         pool: &mut Pool<CoinTypeA, CoinTypeB>,
         coin_in: Coin<CoinTypeA>,
@@ -152,6 +311,42 @@ module suidex::router {
         (coin_b_out, coin_in)
     }
 
+    /// Swap token A for exact amount of token B
+    /// This function is for other modules to use
+    public fun swap_exact_output<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        coin_in: Coin<CoinTypeA>,
+        amount_out: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ): (Coin<CoinTypeB>, Coin<CoinTypeA>) {
+        swap_exact_output_internal(factory, pool, coin_in, amount_out, deadline, ctx)
+    }
+
+    /// Entry function for swapping exact output, always transfers output to sender
+    public entry fun swap_exact_output_and_transfer<CoinTypeA, CoinTypeB>(
+        factory: &DexFactory,
+        pool: &mut Pool<CoinTypeA, CoinTypeB>,
+        coin_in: Coin<CoinTypeA>,
+        amount_out: u64,
+        deadline: u64,
+        ctx: &mut TxContext
+    ) {
+        let (coin_b_out, coin_a_remaining) = swap_exact_output_internal(
+            factory,
+            pool,
+            coin_in,
+            amount_out,
+            deadline,
+            ctx
+        );
+        
+        // Transfer output and remaining coins to sender
+        transfer::public_transfer(coin_b_out, tx_context::sender(ctx));
+        transfer::public_transfer(coin_a_remaining, tx_context::sender(ctx));
+    }
+
     /// Utility function to calculate the amount that will be received for a given input
     public fun get_amount_out<CoinTypeA, CoinTypeB>(
         pool: &Pool<CoinTypeA, CoinTypeB>,
@@ -167,4 +362,4 @@ module suidex::router {
 
     // Constants
     const FEE_DENOMINATOR: u64 = 10000;
-} 
+}

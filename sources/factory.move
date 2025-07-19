@@ -70,19 +70,18 @@ module suidex::factory {
         let pool_key = get_pool_key(&type_a_bytes, &type_b_bytes);
         assert!(!table::contains(&factory.pools, pool_key), EPoolExists);
         
-        // Create the pool (internally handles ordering)
-        pool::create_pool<CoinTypeA, CoinTypeB>(ctx);
+        // Create the pool and get its address
+        let pool_address = pool::create_pool_and_get_address<CoinTypeA, CoinTypeB>(ctx);
         
-        // Get the newly created pool's address (this would require an event listener in practice)
-        // For now, we'll use a placeholder approach - in a real implementation, we'd capture the
-        // pool address from an event emitted by pool::create_pool
+        // Register the pool with its real address
         factory.pool_count = factory.pool_count + 1;
+        table::add(&mut factory.pools, pool_key, pool_address);
         
         // Emit event for pool registration
         event::emit(PoolRegistered {
             token_a: type_a_bytes,
             token_b: type_b_bytes,
-            pool_address: @0x0 // This is a placeholder - in a real implementation, we'd get the actual pool address
+            pool_address: pool_address
         });
     }
 

@@ -32,6 +32,14 @@ module suidex::lp_token {
         recipient: address
     }
 
+    /// Event emitted when LP tokens are joined (merged)
+    struct LPJoined<phantom X, phantom Y> has copy, drop {
+        from_id: address,
+        to_id: address,
+        amount: u64,
+        recipient: address
+    }
+
     /// Initialize a new LP token for a token pair
     public fun new<X, Y>(ctx: &mut TxContext): LPCap<X, Y> {
         LPCap<X, Y> {
@@ -56,10 +64,10 @@ module suidex::lp_token {
         ctx: &mut TxContext
     ) {
         let balance = balance::increase_supply(&mut cap.supply, amount);
-        let value = balance::value(&balance);
-        balance::destroy_zero(balance);
+        // let value = balance::value(&balance);
+        balance::decrease_supply(&mut cap.supply, balance);
         
-        recipient.balance = recipient.balance + value;
+        recipient.balance = recipient.balance + amount;
         
         event::emit(LPMinted<X, Y> {
             amount,
@@ -111,11 +119,27 @@ module suidex::lp_token {
         }
     }
 
-    /// Join (merge) LP tokens
-    public fun join<X, Y>(lp: &mut LP<X, Y>, other: LP<X, Y>) {
+    /// Join (merge) LP tokens - now as an entry function
+    public fun join<X, Y>(lp: &mut LP<X, Y>, other: LP<X, Y>, ctx: &mut TxContext) {
         let LP { id, balance } = other;
+        
+        // Get the object ID as an address for the event
+        let from_id = object::uid_to_address(&id);
+        let to_id = object::uid_to_address(&lp.id);
+        
+        // Delete the other LP token's ID
         object::delete(id);
+        
+        // Add the balance to the main LP token
         lp.balance = lp.balance + balance;
+        
+        // Emit the join event
+        event::emit(LPJoined<X, Y> {
+            from_id,
+            to_id,
+            amount: balance,
+            recipient: tx_context::sender(ctx)
+        });
     }
 
     /// Transfer LP tokens to an address
@@ -127,4 +151,11 @@ module suidex::lp_token {
     public fun total_supply<X, Y>(cap: &LPCap<X, Y>): u64 {
         balance::supply_value(&cap.supply)
     }
-} 
+    
+    /// Destroy an LP token with zero balance
+    public fun destroy_zero<X, Y>(lp: LP<X, Y>) {
+        let LP { id, balance } = lp;
+        assert!(balance == 0, 0); // Error if balance is not zero
+        object::delete(id);
+    }
+}
